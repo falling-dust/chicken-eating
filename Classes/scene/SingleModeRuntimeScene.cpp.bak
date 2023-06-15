@@ -1,0 +1,388 @@
+//
+//  SingleModeRunTimeScence.cpp
+//  PUBG
+//
+//  Created by PC1 on 2021/5/19.
+//
+
+#define PTM_RATIO 32.0f
+
+#include "HelloWorldScene.h"
+#include "SingleModeRuntimeScene.h"
+#include "PauseScene.h"
+#include "const.h"
+#include <CCVector.h>
+
+
+
+USING_NS_CC;
+
+Scene* SingleModeRuntime::createScene()
+{
+    auto scene = Scene::createWithPhysics();
+    auto layer = SingleModeRuntime::create();
+    scene->addChild(layer,1,10);
+    scene->getPhysicsWorld()->setGravity(Vec2(0,0));
+    return scene;
+}
+
+static void problemLoading(const char* filename)
+{
+    printf("Error while loading: %s\n", filename);
+    printf("Depending on how you compiled you might have to add 'Resources/' in front of filenames in HelloWorldScene.cpp\n");
+}
+
+
+bool SingleModeRuntime::init()
+{
+    if ( !Scene::init() )
+    {
+        return false;
+    }
+
+    auto visibleSize = Director::getInstance()->getVisibleSize();//实际窗口尺寸
+    Vec2 origin = Director::getInstance()->getVisibleOrigin();//偏移值
+    
+    //地
+    testMap = TMXTiledMap::create("textMap.tmx");
+    this->addChild(testMap,0,0);
+   
+    //战歌起
+    groundMusicPlay();
+    
+    auto groupwall = testMap->getObjectGroup("wall");
+    ValueVector objectsWall = groupwall->getObjects();
+    
+    
+    for (auto wall : objectsWall)
+    {
+        ValueMap& dict = wall.asValueMap();
+        
+        float x = dict["x"].asFloat();
+        float y = dict["y"].asFloat();
+        float width = dict["width"].asFloat();
+        float height = dict["height"].asFloat();
+        float rotate = dict["rotation"].asFloat();
+
+        PhysicsBody* tmpPhysicsBody = PhysicsBody::createBox(Size(width, height));
+        tmpPhysicsBody->setDynamic(false);
+        tmpPhysicsBody->setCategoryBitmask(1);
+        tmpPhysicsBody->setCollisionBitmask(1);
+        tmpPhysicsBody->setContactTestBitmask(1);
+        
+        Sprite* tmpSprite = Sprite::create();
+        tmpSprite->setPosition(Vec2(x, y));
+        tmpSprite->setAnchorPoint(Vec2::ZERO);
+        tmpSprite->setContentSize(Size(width, height));
+        tmpSprite->setPhysicsBody(tmpPhysicsBody);
+        
+        addChild(tmpSprite,1,5);
+    }
+
+    
+    
+    
+    PhysicsBody* heroPhysicsBody = PhysicsBody::createBox(Size(player.getContentSize()));
+    heroPhysicsBody->setDynamic(true);
+    heroPhysicsBody->setCategoryBitmask(1);
+    heroPhysicsBody->setCollisionBitmask(1);
+    heroPhysicsBody->setContactTestBitmask(1);
+    
+    player.delegateSprite->setPhysicsBody(heroPhysicsBody);
+    
+   
+    addChild(&player);
+    //监听键盘
+    auto* dispatcher = Director::getInstance()->getEventDispatcher();
+    auto* keyListener = EventListenerKeyboard::create();
+    //创建一个事件监听器监听键盘事件
+    keyListener->onKeyPressed = CC_CALLBACK_2(hero::onKeyPressed, &player);
+    //键盘被按下时响应
+    keyListener->onKeyReleased = CC_CALLBACK_2(hero::onKeyReleased,&player);
+    //键盘按键被弹回时响应
+    dispatcher->addEventListenerWithSceneGraphPriority(keyListener, this);
+    //设置更新函数
+    scheduleUpdate();
+    
+    
+    auto labelGameName = Label::createWithTTF("single", "Marker Felt.ttf", 45);
+    if (labelGameName == nullptr)
+    {
+        problemLoading("'Marker Felt.ttf'");
+    }
+    else
+    {
+        // position the label on the center of the screen
+        labelGameName->setPosition(Vec2(origin.x + visibleSize.width/2,
+                                origin.y + visibleSize.height - labelGameName->getContentSize().height));
+
+        // add the label as a child to this layer
+        this->addChild(labelGameName, 1);
+    }
+    
+    //暂停按钮
+    pauseItem = MenuItemImage::create("pausebutton.png",
+                                           "pausebutton.png",
+                                           CC_CALLBACK_1(SingleModeRuntime::menuPauseCallback, this));
+
+    if (pauseItem == nullptr ||
+        pauseItem->getContentSize().width <= 0 ||
+        pauseItem->getContentSize().height <= 0)
+    {
+        problemLoading("'pausebutton.png'");
+    }
+    else
+    {
+        float x = origin.x + visibleSize.width-pauseItem->getContentSize().width/2;
+        float y = origin.y + visibleSize.height-pauseItem->getContentSize().height/2;
+        pauseItem->setPosition(Vec2(x,y));
+    }
+    auto pauseButtonMenu = Menu::create(pauseItem, NULL);
+    pauseButtonMenu->setPosition(Vec2::ZERO);
+    this->addChild(pauseButtonMenu, 1);
+
+    //UI
+    //血条
+    
+    auto healthImg = Sprite::create("HealthImg.png");
+    healthImg->setPosition(visibleSize.width/4,visibleSize.height/8);
+    this->addChild(healthImg, 2);
+
+    //测试数据
+    int sHealthPoint=60;
+    int maxHealthPoint=100;
+    
+    auto sliderTrack1 = Sprite::create("SliderTrack.png");
+    sliderTrack1->setPosition(visibleSize.width/2,visibleSize.height/8);
+    this->addChild(sliderTrack1, 1);
+    
+    pHealth = ProgressTimer::create(Sprite::create("HealthBar.png"));
+    pHealth->setPosition(visibleSize.width/2, visibleSize.height / 8);
+    pHealth->setType(ProgressTimer::Type::BAR);
+    pHealth->setMidpoint(Point(0, 0.5));
+    pHealth->setBarChangeRate(Point(1, 0));
+    pHealth->setPercentage(static_cast<float>(sHealthPoint)
+        / static_cast<float>(maxHealthPoint) * 100);
+    this->addChild(pHealth,2);
+    
+    //护甲条
+    auto armorImg = Sprite::create("ArmorImg.png");
+    armorImg->setPosition(Point(visibleSize.width/4,visibleSize.height/16));
+    this->addChild(armorImg, 2);
+
+    //测试数据
+    int sArmorPoint=80;
+    int maxArmorPoint=100;
+    
+    auto sliderTrack2 = Sprite::create("SliderTrack.png");
+    sliderTrack2->setPosition(visibleSize.width/2,visibleSize.height/16);
+    this->addChild(sliderTrack2, 1);
+    
+    pArmor = ProgressTimer::create(Sprite::create("ArmorBar.png"));
+    pArmor->setPosition(origin.x + visibleSize.width/2, visibleSize.height / 16);
+    pArmor->setType(ProgressTimer::Type::BAR);
+    pArmor->setMidpoint(Point(0, 0.5));
+    pArmor->setBarChangeRate(Point(1, 0));
+    pArmor->setPercentage(static_cast<float>(sArmorPoint)
+        / static_cast<float>(maxArmorPoint) * 100);
+    this->addChild(pArmor,2);
+    
+    
+    /*
+    HeroUI *heroUI=HeroUI::create();
+    //heroUI->setPosition(118.5f, 661.5f);
+    this->addChild(heroUI);
+    */
+    
+    //子弹1
+    auto bulletType1 = ui::Scale9Sprite::create("BulletType1.png");
+    if(bulletType1 == nullptr)
+    {
+        problemLoading("'BulletType1.png'");
+    }
+    else
+    {
+        //bulletType1->setCapInsets(Rect(6, 6, 79, 61));
+        //bulletType1->setContentSize(Size(300, 200));
+        bulletType1->setPosition(origin.x + visibleSize.width/30, visibleSize.height / 4);
+        this->addChild(bulletType1, 1);
+        //测试数据
+        int pBullet1=30;
+        int maxBullet1=100;
+        std::string bullet1Message = std::to_string(pBullet1) + "/" +
+                std::to_string(maxBullet1);
+        pBullet1Message = Label::createWithTTF(bullet1Message, "IRANYekanBold.ttf", 18.f);
+        pBullet1Message->setPosition(visibleSize.width/8, visibleSize.height / 4);
+        this->addChild(pBullet1Message, 3);
+    }
+    
+    
+    //子弹2
+    auto bulletType2 = ui::Scale9Sprite::create("BulletType2.png");
+    if(bulletType2 == nullptr)
+    {
+        problemLoading("'BulletType2.png'");
+    }
+    else
+    {
+        //bulletType1->setCapInsets(Rect(6, 6, 79, 61));
+        //bulletType1->setContentSize(Size(300, 200));
+        bulletType2->setPosition(origin.x + visibleSize.width/30, visibleSize.height / 4-visibleSize.height/15);
+        this->addChild(bulletType2, 0);
+        //测试数据
+        int pBullet2=40;
+        int maxBullet2=100;
+        std::string bullet2Message = std::to_string(pBullet2) + "/" +
+                std::to_string(maxBullet2);
+        pBullet2Message = Label::createWithTTF(bullet2Message, "IRANYekanBold.ttf", 18.f);
+        pBullet2Message->setPosition(visibleSize.width/8, visibleSize.height / 4-visibleSize.height/15);
+        this->addChild(pBullet2Message, 3);
+    }
+    
+    //子弹3
+    auto bulletType3 = ui::Scale9Sprite::create("BulletType3.png");
+    if(bulletType3 == nullptr)
+    {
+        problemLoading("'BulletType3.png'");
+    }
+    else
+    {
+        //bulletType1->setCapInsets(Rect(6, 6, 79, 61));
+        //bulletType1->setContentSize(Size(300, 200));
+        bulletType3->setPosition(origin.x + visibleSize.width/30, visibleSize.height / 4-2*visibleSize.height/15);
+        this->addChild(bulletType3, 0);
+        //测试数据
+        int pBullet3=50;
+        int maxBullet3=100;
+        std::string bullet3Message = std::to_string(pBullet3) + "/" +
+                std::to_string(maxBullet3);
+        pBullet3Message = Label::createWithTTF(bullet3Message, "IRANYekanBold.ttf", 18.f);
+        pBullet3Message->setPosition(visibleSize.width/8, visibleSize.height / 4-2*visibleSize.height/15);
+        this->addChild(pBullet3Message, 3);
+    }
+    
+    //子弹4
+    auto bulletType4 = ui::Scale9Sprite::create("BulletType4.png");
+    if(bulletType4 == nullptr)
+    {
+        problemLoading("'BulletType4.png'");
+    }
+    else
+    {
+        //bulletType1->setCapInsets(Rect(6, 6, 79, 61));
+        //bulletType1->setContentSize(Size(300, 200));
+        bulletType4->setPosition(origin.x + visibleSize.width/30, visibleSize.height / 4-3*visibleSize.height/15);
+        this->addChild(bulletType4, 0);
+        //测试数据
+        int pBullet4=80;
+        int maxBullet4=100;
+        std::string bullet4Message = std::to_string(pBullet4) + "/" +
+                std::to_string(maxBullet4);
+        pBullet4Message = Label::createWithTTF(bullet4Message, "IRANYekanBold.ttf", 18.f);
+        pBullet4Message->setPosition(visibleSize.width/8, visibleSize.height / 4-3*visibleSize.height/15);
+        this->addChild(pBullet4Message, 3);
+    }
+    
+    
+    
+    
+   //设置更新函数
+    scheduleUpdate();
+    
+    return true;
+}
+
+
+void SingleModeRuntime::groundMusicPlay()
+{
+    auto engine = CocosDenshion::SimpleAudioEngine::getInstance();
+    engine->playBackgroundMusic("金﨑猛 - フォドラの暁風.mp3",true);
+}
+
+void SingleModeRuntime::menuCloseCallback(Ref* pSender)
+{
+    //Close the cocos2d-x game scene and quit the application
+    Director::getInstance()->end();
+}
+
+
+void SingleModeRuntime::menuPauseCallback(Ref* pSender)
+{
+    auto visibleSize = Director::getInstance()->getVisibleSize();
+    auto *renderTexture = RenderTexture::create(visibleSize.width, visibleSize.height);
+        //遍历当前类的所有子节点信息，画入renderTexture中。
+        //这里类似截图。
+    //auto *curScene=Director::getRunningScene();
+    renderTexture->begin();
+    this->visit();
+    renderTexture->end();
+      //将游戏界面暂停，压入场景堆栈。并切换到GamePause界面
+    Director::getInstance()->pushScene(Pause::createScene(renderTexture)); //这里实际是通过CCRenderTexture保存当前界面（相当于截屏），然后传递给暂停界面，当成背景精灵
+}
+
+
+void SingleModeRuntime::setCneterPointOfView()
+{
+    auto visibleSize = Director::getInstance()->getVisibleSize();//实际窗口尺寸
+    Vec2 origin = Director::getInstance()->getVisibleOrigin();//偏移值
+//因为这里是要通过传入的点p来显示设定CCLayer的位置，p为英雄坐标，当做显示中心点。
+//TileMap的size肯定大于WinSize（分辨率），不然有黑边，而且也不用移动地图了。
+//因此p的x、y的值肯定要大于等于屏幕中心的值
+int x = MAX(player.delegateSprite->getPosition().x , visibleSize.width / 2);
+int y = MAX(player.delegateSprite->getPosition().y  , visibleSize.height / 2);
+    
+//同理，p的x、y要小于等于TileMap的size的宽高减去WinSize的中心值,不然也会出现黑边
+x = MIN(x,testMap->getMapSize().width * testMap->getTileSize().width - visibleSize.width / 2);
+y = MIN(y,testMap->getMapSize().height * testMap->getTileSize().height - visibleSize.height / 2);
+
+/*这里是用地图中心的真实坐标减去屏幕中心坐标来得到两个中心之差（
+真实中心肯定为屏幕中心右上部）,得到的差值就是TileMap的偏移值（其x、y都为非正数）。
+重点：由于CClayer为了初始化位置是始终显示到屏幕左下角方便，因此其锚点为（0,0），
+刚好可以把以上求得的偏移值作为其坐标。*/
+Point actualPosition = Vec2(x,y);
+Point winCenter = Vec2(visibleSize.width / 2 , visibleSize.height /2);
+Point viewPosition = winCenter-actualPosition;
+pauseItem->setPosition(Vec2(origin.x + visibleSize.width-pauseItem->getContentSize().width/2-(testMap->getMapSize().width * testMap->getTileSize().width - visibleSize.width / 2),visibleSize.height-pauseItem->getContentSize().height/2-(testMap->getMapSize().height * testMap->getTileSize().height - visibleSize.height / 2)));
+this->getScene()->setPosition(viewPosition);
+}
+
+ 
+void SingleModeRuntime::update(float dt)
+{
+    setCneterPointOfView();
+    
+    //int velocityIterations = 8;             //速度迭代次数
+    //int positionIterations = 1;             //位置迭代次数
+    
+    //this->getPhysicsWorld()->step(dt);    //世界的更新
+     
+}
+ 
+
+
+//void SingleModeRuntime::scheduleUI(float dt)
+//{
+    /*
+    if (sHealthPoint != hero::pHealthPoint)
+    {
+        sHealthPoint = hero::pHealthPoint;
+        pHealth->setPercentage(static_cast<float >(sHealthPoint)
+                                 / static_cast<float >(sHealthPoint) * 100);
+        std::string healthMessage = std::to_string(sHealthPoint) + "/" +
+                std::to_string(maxHealthPoint);
+    }
+
+    if (sArmorPoint != hero::pDefencePoint)
+    {
+        sArmorPoint = hero::pDefencePoint;
+        pArmor->setPercentage(static_cast<float >(sArmorPoint)
+                               / static_cast<float >(sArmorPoint) * 100);
+        std::string armorMessage = std::to_string(sArmorPoint) + "/" +
+                std::to_string(maxArmorPoint);
+    }*/
+//}
+
+
+
+
+
